@@ -10,8 +10,8 @@ The basic syntax is:
 
 	ctopdf using "Path/to/file.xlsx", save("Path/to/save/directory"). 
 
-Aside from the save option, all other options are optional. Most of the
-time, you will probably want to specify the title of your survey and the date. 
+Aside from the save and title options, all other options are optional. Most of the
+time, you will probably want to specify the date. 
 
 Explanations of the options: 
 
@@ -21,35 +21,45 @@ Explanations of the options:
 	  to save each module of the survey as a separate pdf. 
 	* skiplist - lines in the excel version of the SurveyCTO survey that you would like
 	  to skip. specified as a numlist. 
-	* title - title of the survey
+	* title - title of the survey and the saved file, if you merge it automatically. 
 	* date- today's date 
 	* version - version number / name
 	* choicelength - minimum number of choices a value label can have to be placed 
 	  in the value label dictionary. All other value label options appear in the
 	  text of the main survey every time they are used. 
 	* coverimage - path to file of image that you would like to appear on the cover
-	* translation - language that you would like translation to appear in. WORK IN PROGRESS
-
+	* translation - WORK IN PROGRESS - language that you would like translation to appear in. 
+	* packages - ssc installs / updates all of the packages needed to make the program work
+	* loudvars - print the name of each variable as it is formatted. mostly for debugging purposes. 
+	
 Fully specified, the function might look like:
 
 	ctopdf using "Path/to/file.xlsx", save("Path/to/save/directory") merge  ///
 	skiplist(100 (1) 147, 200 (1) 300) title(My Title) date(01.04.19) version(7) ///
 	authors(First1 Last1, First2 Last2, and First3 Last3) choicelength(5) ///
-	translation(swahili) coverimage("Path/to/image.png")
+	coverimage("Path/to/image.png") packages
  
 Some things that can go wrong / that you could want to know: 
+
  1- If you get an error like "Failed to set table", try manually entering "putpdf clear" 3 times from the stata command line. I don't know why this works, but it sometimes does. 
  2- Make sure to use forward slashes (/) when specifying files, not backwards slashes (\)
  3- If you have questions or value labels of more than 2045 characters, they will be truncated. 
 	Characters like $, }, {, and " will also be removed from all strings. 
  4- Disabled questions will not be included in the pdf.  
  5- This function will clear all of your global macros 
+ 6- You try to do the merge option without having installed PDFTK (right now, 
+ only Windows is supported). 
+ 7- You don't have ssc packages mmerge and egenmore installed. Specify the packages option. 
+ 8- specify the DIRECTORY of the saving location, not the file name (so "C:/Users/me/Desktop" not "C:/Users/me/Desktop/survey.pdf")  
  
- */
+ To get the merge option working, install PDFTK: 
+ https://www.pdflabs.com/tools/pdftk-the-pdf-toolkit/
+ 
+  */
 
 cap prog drop ctopdf 
 prog def ctopdf 
-syntax using/, SAve(string)[Merge SKiplist(numlist) TItle(string) Date(string) Packages TRANSLation Version(string) CHOICElength(integer 10) COVERimage(string) Authors(string)]
+syntax using/, TItle(string) SAve(string)[Merge SKiplist(numlist) Date(string) Packages TRANSLation Version(string) CHOICElength(integer 10) COVERimage(string) Authors(string) loudvars]
 
 ////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////// Preliminaries //////////////////////////////////
@@ -101,7 +111,7 @@ if !_rc {
 	qui drop if list_name == ""
 	qui drop if list_name == " "  
 	
-	// reshape wide
+	// reshape wide to vars list_name choice1 choice2 ... 
 	qui reshape wide label value, i(list_name) j(choice_count)
 	
 	// gen / clean vars wide
@@ -138,11 +148,12 @@ if !_rc {
 	// import survey 
 	qui import excel using "`using'", clear firstrow sheet("survey")
 	
-	// gen index 
+	// gen index (that we eventually loop over)
 	* NOTE: We create the below index immediately so that no subsequent commands alter 
 	* the order in which questions appear
+	qui drop if mi(type) & mi(name) & mi(label)
 	qui gen index = _n
-	
+
 	// standardize variable set 
 	loc actualvars
 	local possiblevars index type name label* hint* default appearance constraint* relevance disabled required* readonly calculation repeat_count media* choice_filter note response_note publishable minimum_seconds
@@ -153,7 +164,7 @@ if !_rc {
 	keep `actualvars'
 
 	// gen / clean other key vars 
-	
+
 		// names 
 		qui duplicates tag name if name != "" & strpos(type, "begin ") == 0 & strpos(type, "end ") == 0 , gen(dupname)		
 		capture assert dupname == 0 | dupname == .
@@ -164,16 +175,20 @@ if !_rc {
 			exit
 		}
 		drop dupname 
-		
-		// group 
-		qui egen group_num = group2(name) if strpos(type, "group") > 0, sort(min(index)) label
-		qui gen group = ""
-		qui sum group_num
-		forvalues i = 1 / `r(max)' { 
-			qui levelsof name if group_num == `i', loc(groupname) clean 
-			qui sum index if group_num == `i', d 
-			qui replace group = "`groupname'" if index <=`r(max)' & index >= `r(min)'
+
+		// group
+		count if strpos(type, "group") > 0
+		if `r(N)' > 0 {
+			qui egen group_num = group2(name) if strpos(type, "group") > 0, sort(min(index)) label
+			qui gen group = ""
+			qui sum group_num
+			forvalues i = 1 / `r(max)' { 
+				qui levelsof name if group_num == `i', loc(groupname) clean 
+				qui sum index if group_num == `i', d 
+				qui replace group = "`groupname'" if index <=`r(max)' & index >= `r(min)'
+			}
 		}
+		else gen group = ""
 	
 		// choice label name
 		qui split type if strpos(type, "select_one") + strpos(type, "select_multiple") > 0, gen(choices)
@@ -231,20 +246,24 @@ if !_rc {
 				}
 			}	
 	}
-	
+
 ////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////// format survey ////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////							
 				
-	// count "real" questions during loop
-	* NOTE: types included are text, integer, select_one, and select_mulitple
-	global question_count = 0
+	// define basic macros that we will use below in formatting
+	* NOTE: question_count will count text, integer, select_one, and select_mulitple
+	global question_count = 1 // begin at 1
 	* NOTE: if in later updates, a single loop of the formatquestion function can 
 	* create more than 10 tables, then you should  increase table_count
 	global table_count = 10 
 	global doc_count = 0
-
-	// begin 
+	
+	capture confirm e `loudvars' 
+	if !_rc loc loud_vars = 1
+	else loc loud_vars = 0
+	
+	// begin pdf
 	putpdf clear 
 	putpdf begin, font(, 10) margin(left, .1in) margin(right, .1in) 
 	
@@ -271,11 +290,11 @@ if !_rc {
 	putpdf pagebreak 
 
 	// main survey 
+	* NOTE: Here, we are looping over each row of the surveyCTO excel sheet. 
 	qui sum index 
 	forvalues i = 1/`r(max)' {
 
-	// ignore disabled questions
-
+		// ignore disabled questions
 		qui levelsof disable if index == `i', loc(disabled) clean
 		qui levelsof type if index == `i', loc(type) clean 
 		
@@ -290,14 +309,14 @@ if !_rc {
 				if `k' == `j' loc skip = `skip' + 1
 				else loc skip = `skip' + 0
 		}
-		if `skip' == 1 {
-			di "skipped row `i'"
-			continue
-		}
+			if `skip' == 1 {
+				if `loud_vars' == 1 di "skipped row `i'"
+				continue
+			}
 		}
 		
 		// save modules and large sections (>=500 tables) individually 
-		if $table_count >=500 | ("`type'" == "MODULE" & $doc_count > 0) {
+		if $table_count >=500 | ("`type'" == "MODULE") {
 			global doc_count = $doc_count + 1
 			if ${doc_count} < 10 loc docstr = "0${doc_count}"
 			else loc docstr = "${doc_count}"
@@ -306,24 +325,24 @@ if !_rc {
 				qui egen modulename = sieve(name), keep(alphabetic numeric) 
 				qui levelsof modulename if index == `i', loc(modulename) clean
 				qui drop modulename
-				di "`save'/part`docstr'_`modulename'.pdf"
 				putpdf save "`save'/part`docstr'_`modulename'.pdf", replace
 			}
 			else putpdf save "`save'/part`docstr'_`modulename'.pdf", replace
 			di "saved part ${doc_count}, `modulename'"
 
-			putpdf clear 
-			putpdf begin 
+			putpdf clear
+			putpdf begin
 			global table_count = 10 
 		}
-	
-		preserve 
+		
+		// real work done here, by formatquestion function. we define this below. 
+		preserve
 		qui keep if index == `i'
-		formatquestion
-		restore 
+		formatquestion, choicelength(`choicelength') loud_vars(`loud_vars')
+		restore
 	}
 	
-	di "just before final"
+	
 	
 	// save final survey section
 	global doc_count = $doc_count + 1
@@ -337,39 +356,40 @@ if !_rc {
 	putpdf begin , font(, 10) margin(left, .1in) margin(right, .1in) 
 	putpdf paragraph, font(, 14) halign(center) 
 	putpdf text ("Value Label Dictionary"), bold
-	levelsof list_name if choicecount >= `choicelength', loc(longvls) clean 
+	qui levelsof list_name if choicecount >= `choicelength', loc(longvls) clean 
 	capture confirm e `longvls' 
+	
 	if !_rc {
-	foreach l in `longvls' {
-		qui levelsof choices if list_name == "`l'", loc(choices) clean
-		qui levelsof values if list_name == "`l'", loc(values) clean 
-		qui levelsof choicecount if list_name == "`l'", loc(ccount) clean
-		putpdf paragraph, halign(center) 
-		putpdf text ("`l'"), bold
-		putpdf table vl = (`ccount', 2), halign(center)
-		forvalues j = 1 / `ccount' { 
-			loc w : word `j' of `choices'
-			loc v: word `j' of `values'
-			putpdf table vl(`j', 1) = ("`w'")
-			putpdf table vl(`j', 2) = ("`v'") 
-			
+		foreach l in `longvls' {
+			qui levelsof choices if list_name == "`l'", loc(choices) clean
+			qui levelsof values if list_name == "`l'", loc(values) clean 
+			qui levelsof choicecount if list_name == "`l'", loc(ccount) clean
+			putpdf paragraph, halign(center) 
+			putpdf text ("`l'"), bold
+			qui putpdf table vl = (`ccount', 2), halign(center)
+			forvalues j = 1 / `ccount' { 
+				loc w : word `j' of `choices'
+				loc v: word `j' of `values'
+				putpdf table vl(`j', 1) = ("`w'")
+				putpdf table vl(`j', 2) = ("`v'") 
+			}
 		}
-	}
-	global doc_count = $doc_count + 1
-	if ${doc_count} < 10 loc docstr = "0${doc_count}"
-	else loc docstr = "${doc_count}"	
-	putpdf save "`save'/part`docstr'_valuelabels.pdf", replace 
-	di "saved part ${doc_count}, value label dictionary"
+		global doc_count = $doc_count + 1
+		if ${doc_count} < 10 loc docstr = "0${doc_count}"
+		else loc docstr = "${doc_count}"	
+		putpdf save "`save'/part`docstr'_valuelabels.pdf", replace 
+		di "saved part ${doc_count}, value label dictionary"
 	}
 	
 // merge files 
 	capture confirm e `merge'
 	if !_rc {
-		shell
-		shell "S:\Dropbox\SurveyCTO_to_PDF\Code\merge.py"
+		!cd `save' & pdftk.exe part*.pdf cat output "`title'.pdf"
+		!cd `save' & del part*
+		di "See `save'/`title'.pdf"
 	} 
 	else{
-		di "merge the files manually!" 
+		di `"see individual, unmerged pdfs saved at "`save'""' 
 	}
 	
 end
@@ -380,8 +400,9 @@ end
 
 cap prog drop formatquestion
 prog def formatquestion
+syntax, choicelength(integer) loud_vars(integer)
 
-	// define fundamental locals 
+	// define fundamental locals for this question
 	* NOTE: currently excluded: default  
 	* requiredmessage readonly mediaimage mediaaudio mediavideo  note
 	* choice_filter response_note publishable labelswahili constraintmessageswahili		
@@ -393,11 +414,27 @@ prog def formatquestion
 		 qui levelsof `var', loc(`var') clean
 	}
 
-	// clean up a few locals 
+	// clean locals defined above (just those that need to be cleaned)
+	
+		// TABLE 1: question label and hint 
+			
+			// hint
+			capture confirm e `hint' 
+			if !_rc loc hint_details = (`"  (Hint: `hint')"')
+			else loc hint_details
+			
+			// labels 
+			capture confirm e `label' 
+			if !_rc loc label_details = "`label'"
+			else {
+				if "`type'" != "calculate" & "`type'" != "calculate_here"  ///
+				loc label_details = "THIS FIELD HAS NO TEXT"
+				else loc label_details
+			}
+
+		// TABLE 2: group, var name, relevance, constraint, and required status 
 		
-		// group, relevance, constraint, and required locals 
-		
-			// number of rows in table containing this info 
+			// number of rows in table 1 
 			loc rows = 1
 			
 			// group 
@@ -453,41 +490,27 @@ prog def formatquestion
 				loc required_details = "NO" 
 				loc rows = `rows' + 1
 			}
-		
-		// question label and hint 
+				
+		// other possible locals outside above tables 
 			
-			// hint
-			capture confirm e `hint' 
-			if !_rc loc hint_details = (`"  (Hint: `hint')"')
-			else loc hint_details
+			// constraint message 
+			capture confirm e `constraintmessage' 
+			if !_rc loc constraintmessage_details = `"`constraintmessage'"'
+			else loc constraintmessage_details 
+
+			// calculation 
+			capture confirm e `calculation' 
+			if !_rc loc calculation_details = "`calculation'" 
+			else loc calculation_details = "NO CALCULATION IS PERFORMED HERE" 
 			
-			// labels 
-			capture confirm e `label' 
-			if !_rc loc label_details = "`label'"
-			else {
-				if "`type'" != "calculate" & "`type'" != "calculate_here"  ///
-				loc label_details = "THIS FIELD HAS NO TEXT"
-				else loc label_details
-			}
-
-		// constraint message 
-		capture confirm e `constraintmessage' 
-		if !_rc loc constraintmessage_details = `"`constraintmessage'"'
-		else loc constraintmessage_details 
-
-		// calculation 
-		capture confirm e `calculation' 
-		if !_rc loc calculation_details = "`calculation'" 
-		else loc calculation_details = "NO CALCULATION IS PERFORMED HERE" 
-		
-		
-		// repeat count 
-		capture confirm e `repeat_count' 
-		if !_rc loc repeatcount_details = "`repeatcount'"
-		else loc repeatcount_details = "NO REPEAT COUNT GIVEN"
+			
+			// repeat count 
+			capture confirm e `repeat_count' 
+			if !_rc loc repeatcount_details = "`repeatcount'"
+			else loc repeatcount_details = "NO REPEAT COUNT GIVEN"
 
 	// define / perform formatting for each type of question 
-	if "`type'" != "" | "`name'" != "" di "`type', `name'" 
+	if `loud_vars' == 1 di "`type', `name'" 
 
 		// BEGIN MODULE
 		if "`type'" == "MODULE" {
@@ -528,7 +551,7 @@ prog def formatquestion
 		// END GROUP
 		if "`type'" == "end group" {
 
-			// define locals
+			// call global (defined in BEGIN GROUP section above) 
 			loc footing = `"${heading`name'}"'
 				
 			// put in pdf 
@@ -540,7 +563,7 @@ prog def formatquestion
 		// BEGIN REPEAT
 		if "`type'" == "begin repeat" {
 			
-			// define global (to be used with footer, local won't survive) 
+			// define global (to be used with footer, local won't survive loops) 
 			capture confirm e `label' 
 			if !_rc {
 				global rheading`name' = "`label_details'" 
@@ -581,7 +604,7 @@ prog def formatquestion
 		
 		// NOTE
 		if "`type'" == "note" {
-							
+
 			// put in pdf 
 			putpdf paragraph				
 			putpdf text ("Note:"), bold
@@ -597,92 +620,94 @@ prog def formatquestion
 		
 		// TEXT, INTEGER, SELECT_ONE, SELECT_MULTI
 		if "`type'" == "text" | "`type'" == "integer" | "`type'" == "select_one" |"`type'" == "select_multiple" {
-		
-			// update question counter 
-			global question_count = $question_count + 1			
-			
+					
 			// put in pdf
 
-				// define cell containing choices, and values 
-				if "`type'" == "select_one" |"`type'" == "select_multiple" {
-
-					if `choicecount' < 10 {
-						qui putpdf table cv = (`choicecount', 1), border(all, nil) memtable
-						forvalues j = 1 / `choicecount' {
-							loc ch: word `j' of `choices' 
-							loc v: word `j' of `values' 
-							putpdf table cv(`j', 1) = ("`ch'  = `v'")
-						}
-						putpdf table cv(1,.), addrows(1, before) 
-						putpdf table cv(1,1) = ("Value label:   "), italic underline 
-						putpdf table cv(1,1) = ("`list_name'") , append underline
-						loc rrrows = 10 
-					}
-					else {
-					qui putpdf table cv = (1,1), memtable
-					putpdf table cv(1, 1) = (`"See value label "`list_name'""'), border(all, nil) italic
-					}
-				}
-				
-				// main question table
-				qui putpdf table nt = (4,7), border(all, nil) memtable
-				putpdf table nt(1,1) = ("$question_count. "), bold  
-				putpdf table nt(1,1) = ("`label_details'`hint_details'"), append
-				putpdf table nt(1,1), span(2, 7) 
-				putpdf table nt(3,1) = ("`type'"), colspan(2) 
-				putpdf table nt(4,1) = (" "), colspan(2)
-				
-				// insert subtable containing question name, type 
-				if "`type'" == "select_one" |"`type'" == "select_multiple" {
-					qui putpdf table nt(4,3) = table(cv), colspan(4) 
-				}
-				
-				// define subtable containing name, relevance, constraints, and required status 
-				if `rows' > 0 { 
-					qui putpdf table auxt = (`rows', 1), border(all, nil) memtable 
-					loc row = 1 
+				// define subtables #1 and #2 (to be put in main table) 
 					
-					capture confirm e `name' 
-					if !_rc { 
-						putpdf table auxt(`row', 1) = ("Var: "), underline 
-						putpdf table auxt(`row', 1) = ("`name_details'"), append
-						loc row = `row' + 1 
-					}
+					// subtable #1 containing question text, hint, and type 
+					qui putpdf table nt = (4,7), border(all, nil) memtable
+					putpdf table nt(1,1) = ("$question_count. "), bold  
+					putpdf table nt(1,1) = ("`label_details'`hint_details'"), append
+					putpdf table nt(1,1), span(2, 7) 
+					putpdf table nt(3,1) = ("`type'"), colspan(2) 
+					putpdf table nt(4,1) = (" "), colspan(2)
 
-					capture confirm e `group' 
-					if !_rc { 
-						putpdf table auxt(`row', 1) = ("Group: "), underline 
-						putpdf table auxt(`row', 1) = ("`group_details'"), append
-						loc row = `row' + 1 
-					}
+						// subsubtable #1 containing choices and values 
+						if "`type'" == "select_one" |"`type'" == "select_multiple" {
 
-					capture confirm e `relevance' 
-					if !_rc { 
-						putpdf table auxt(`row', 1) = ("Relevance: "), underline 
-						putpdf table auxt(`row', 1) = ("`relevance_details'"), append
-						loc row = `row' + 1 
-					}
-											
-					capture confirm e `constraint' 
-					if !_rc { 
-						putpdf table auxt(`row', 1) = ("Constraints: "), underline 
-						putpdf table auxt(`row', 1) = ("`constraint_details'"), append
-						loc row = `row' + 1 
+							if `choicecount' < `choicelength' {
+								qui putpdf table cv = (`choicecount', 1), border(all, nil) memtable
+								forvalues j = 1 / `choicecount' {
+									loc ch: word `j' of `choices' 
+									loc v: word `j' of `values' 
+									putpdf table cv(`j', 1) = ("`ch'  = `v'")
+								}
+								putpdf table cv(1,.), addrows(1, before) 
+								putpdf table cv(1,1) = ("Value label:   "), italic underline 
+								putpdf table cv(1,1) = ("`list_name'") , append underline
+								loc rrrows = 10 
+							}
+							else {
+							qui putpdf table cv = (1,1), memtable
+							putpdf table cv(1, 1) = (`"See value label "`list_name'""'), border(all, nil) italic
+							}
+						}
+					
+					// insert subsubtable #1 into subtable #1 
+					if "`type'" == "select_one" |"`type'" == "select_multiple" {
+						qui putpdf table nt(4,3) = table(cv), colspan(4) 
 					}
 					
-					capture confirm e `required' 
-					if !_rc { 
+					// subtable #2 containing var name, relevance, constraints, and required status 
+					* NOTE: We only want each field to appear if it diverges from the 
+					* norm e.g. if a question is not required, or there is a constraint, etc. 
+					* If none of the fields differ from the norm, then `rows' = 0 
+					* and this table is left blank. 
+					if `rows' > 0 { 
+						qui putpdf table auxt = (`rows', 1), border(all, nil) memtable 
+						loc row = 1 
 						
+						capture confirm e `name' 
+						if !_rc { 
+							putpdf table auxt(`row', 1) = ("Var: "), underline 
+							putpdf table auxt(`row', 1) = ("`name_details'"), append
+							loc row = `row' + 1 
 						}
-					else { 
-						putpdf table auxt(`row', 1) = ("Required: "), underline 
-						putpdf table auxt(`row', 1) = ("`required_details'"), append 
-					}
+
+						capture confirm e `group' 
+						if !_rc { 
+							putpdf table auxt(`row', 1) = ("Group: "), underline 
+							putpdf table auxt(`row', 1) = ("`group_details'"), append
+							loc row = `row' + 1 
+						}
+
+						capture confirm e `relevance' 
+						if !_rc { 
+							putpdf table auxt(`row', 1) = ("Relevance: "), underline 
+							putpdf table auxt(`row', 1) = ("`relevance_details'"), append
+							loc row = `row' + 1 
+						}
+												
+						capture confirm e `constraint' 
+						if !_rc { 
+							putpdf table auxt(`row', 1) = ("Constraints: "), underline 
+							putpdf table auxt(`row', 1) = ("`constraint_details'"), append
+							loc row = `row' + 1 
+						}
 						
-				} 
-				else qui putpdf table autx = (1,1), border(all, nil) memtable
+						capture confirm e `required' 
+						if !_rc
+						else { 
+							putpdf table auxt(`row', 1) = ("Required: "), underline 
+							putpdf table auxt(`row', 1) = ("`required_details'"), append 
+						}
+							
+					} 
+					else qui putpdf table autx = (1,1), border(all, nil) memtable
 				
-				// Create final table
+				// Create final table containing two subtables #1 and #2 defined above
+				* NOTE: If there's a constraint message, add some rows. If not, don't. 
 				capture confirm e `constraintmessage' 
 				if !_rc loc trows = 12
 				else loc trows = 10
@@ -694,13 +719,20 @@ prog def formatquestion
 				if !_rc putpdf table t(11, 1) = ("Constraint Message: `constraintmessage_details'"), italic span(2, 10)
 				else
 			
-			// update table counter 
-			global table_count = $table_count + 3 
-			if "`type'" == "select_one" |"`type'" == "select_multiple" global table_count = $table_count + 1
+			// update counters
+				
+				// table counter 
+				global table_count = $table_count + 3 
+				if "`type'" == "select_one" |"`type'" == "select_multiple" global table_count = $table_count + 1
+			
+				// question counter 
+				global question_count = $question_count + 1			
+
 		}
 		
 		// CALCULATE and CALCULATE_HERE 
 		if "`type'" == "calculate" | "`type'" == "calculate_here" {	
+			
 			// put in pdf 
 			putpdf paragraph				
 			putpdf text ("Calculate:"), bold
@@ -708,4 +740,3 @@ prog def formatquestion
 			putpdf text ("`label_details'"), italic linebreak(1)
 		}
  end
-	
