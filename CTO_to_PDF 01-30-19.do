@@ -8,7 +8,7 @@ and mmerge installed, specify the packages option. Or ssc install them manually.
 
 The basic syntax is: 
 
-	ctopdf using "Path/to/file.xlsx", save("Path/to/save/directory"). 
+	ctopdf using "Path/to/file.xlsx", save("Path/to/save/directory") title(My Title)
 
 Aside from the save and title options, all other options are optional. Most of the
 time, you will probably want to specify the date. 
@@ -51,6 +51,7 @@ Some things that can go wrong / that you could want to know:
  only Windows is supported). 
  7- You don't have ssc packages mmerge and egenmore installed. Specify the packages option. 
  8- specify the DIRECTORY of the saving location, not the file name (so "C:/Users/me/Desktop" not "C:/Users/me/Desktop/survey.pdf")  
+ 9- If you specify merge, other files in your save directory that begin with the word "part" will get deleted. 
  
  To get the merge option working, install PDFTK: 
  https://www.pdflabs.com/tools/pdftk-the-pdf-toolkit/
@@ -258,6 +259,7 @@ if !_rc {
 	* create more than 10 tables, then you should  increase table_count
 	global table_count = 10 
 	global doc_count = 0
+	global module_count = 0 
 	
 	capture confirm e `loudvars' 
 	if !_rc loc loud_vars = 1
@@ -270,7 +272,9 @@ if !_rc {
 	// title page
 	putpdf paragraph, font(, 16) halign(center) 
 	putpdf text ("`title'"), linebreak(3) bold 
-	putpdf text ("`date'"), linebreak(1)
+	
+	capture confirm e `date'
+	if !_rc putpdf text ("`date'"), linebreak(1)
 	
 	capture confirm e `version'
 	if !_rc putpdf text ("Version: `version'"), linebreak(3)
@@ -317,19 +321,34 @@ if !_rc {
 		
 		// save modules and large sections (>=500 tables) individually 
 		if $table_count >=500 | ("`type'" == "MODULE") {
+		
 			global doc_count = $doc_count + 1
 			if ${doc_count} < 10 loc docstr = "0${doc_count}"
 			else loc docstr = "${doc_count}"
 
-			if "`type'" == "MODULE" { 
+			if "`type'" == "MODULE" {
+				
+				if $module_count == 0 {
+					putpdf save "`save'/part`docstr'_titlepage.pdf", replace
+					di "saved part ${doc_count}, Title Page"
+				}
+				else {
+					putpdf save "`save'/part`docstr'_${module_name$module_count}.pdf", replace
+					di "saved part ${doc_count}, ${module_name$module_count}"
+				}
+				
 				qui egen modulename = sieve(name), keep(alphabetic numeric) 
-				qui levelsof modulename if index == `i', loc(modulename) clean
+				qui levelsof modulename if index == `i', loc(moduleloc) clean
 				qui drop modulename
-				putpdf save "`save'/part`docstr'_`modulename'.pdf", replace
+				global module_count = $module_count + 1
+				global module_name$module_count = `"`moduleloc'"'
+				
 			}
-			else putpdf save "`save'/part`docstr'_`modulename'.pdf", replace
-			di "saved part ${doc_count}, `modulename'"
-
+			else {
+				putpdf save "`save'/part`docstr'_${module_name$module_count}.pdf", replace
+				di "saved part ${doc_count}, ${module_name$module_count}"
+			}
+			
 			putpdf clear
 			putpdf begin
 			global table_count = 10 
@@ -348,8 +367,8 @@ if !_rc {
 	global doc_count = $doc_count + 1
 	if ${doc_count} < 10 loc docstr = "0${doc_count}"
 	else loc docstr = "${doc_count}"	
-	putpdf save "`save'/part`docstr'_`modulename'.pdf", replace
-	di "saved part ${doc_count}"
+	putpdf save "`save'/part`docstr'_${module_name$module_count}.pdf", replace
+	di "saved part ${doc_count}, ${module_name$module_count}"
 	
 	// value label index 
 	putpdf clear 
@@ -357,8 +376,8 @@ if !_rc {
 	putpdf paragraph, font(, 14) halign(center) 
 	putpdf text ("Value Label Dictionary"), bold
 	qui levelsof list_name if choicecount >= `choicelength', loc(longvls) clean 
-	capture confirm e `longvls' 
 	
+	capture confirm e `longvls' 
 	if !_rc {
 		foreach l in `longvls' {
 			qui levelsof choices if list_name == "`l'", loc(choices) clean
@@ -371,9 +390,10 @@ if !_rc {
 				loc w : word `j' of `choices'
 				loc v: word `j' of `values'
 				putpdf table vl(`j', 1) = ("`w'")
-				putpdf table vl(`j', 2) = ("`v'") 
+				putpdf table vl(`j', 2) = ("`v'")
 			}
 		}
+
 		global doc_count = $doc_count + 1
 		if ${doc_count} < 10 loc docstr = "0${doc_count}"
 		else loc docstr = "${doc_count}"	
@@ -384,10 +404,20 @@ if !_rc {
 // merge files 
 	capture confirm e `merge'
 	if !_rc {
-		!cd `save' & pdftk.exe part*.pdf cat output "`title'.pdf"
-		!cd `save' & del part*
-		di "See `save'/`title'.pdf"
-	} 
+	
+		if c(os) == "MacOSX" {
+			!source /etc/profile && cd "`save'" && pdftk part*.pdf cat output "`title'.pdf"
+			!cd "`save'" && rm part*.pdf
+			di "See `save'/`title'.pdf"
+		}
+		
+		else {
+			!cd "`save'" & pdftk.exe part*.pdf cat output "`title'.pdf"
+			!cd "`save'" & del part*.pdf
+			di "See `save'/`title'.pdf"
+		}
+	}
+		
 	else{
 		di `"see individual, unmerged pdfs saved at "`save'""' 
 	}
@@ -627,11 +657,11 @@ syntax, choicelength(integer) loud_vars(integer)
 					
 					// subtable #1 containing question text, hint, and type 
 					qui putpdf table nt = (4,7), border(all, nil) memtable
-					putpdf table nt(1,1) = ("$question_count. "), bold  
+					putpdf table nt(1,1) = ("$question_count. "), bold
 					putpdf table nt(1,1) = ("`label_details'`hint_details'"), append
 					putpdf table nt(1,1), span(2, 7) 
 					putpdf table nt(3,1) = ("`type'"), colspan(2) 
-					putpdf table nt(4,1) = (" "), colspan(2)
+					putpdf table nt(4,1) = (" "), colspan(2) 
 
 						// subsubtable #1 containing choices and values 
 						if "`type'" == "select_one" |"`type'" == "select_multiple" {
@@ -643,8 +673,8 @@ syntax, choicelength(integer) loud_vars(integer)
 									loc v: word `j' of `values' 
 									putpdf table cv(`j', 1) = ("`ch'  = `v'")
 								}
-								putpdf table cv(1,.), addrows(1, before) 
-								putpdf table cv(1,1) = ("Value label:   "), italic underline 
+								putpdf table cv(1,.), addrows(1, before) nosplit 
+								putpdf table cv(1,1) = ("Value label:   "), italic underline
 								putpdf table cv(1,1) = ("`list_name'") , append underline
 								loc rrrows = 10 
 							}
@@ -652,10 +682,7 @@ syntax, choicelength(integer) loud_vars(integer)
 							qui putpdf table cv = (1,1), memtable
 							putpdf table cv(1, 1) = (`"See value label "`list_name'""'), border(all, nil) italic
 							}
-						}
-					
-					// insert subsubtable #1 into subtable #1 
-					if "`type'" == "select_one" |"`type'" == "select_multiple" {
+						
 						qui putpdf table nt(4,3) = table(cv), colspan(4) 
 					}
 					
@@ -664,7 +691,7 @@ syntax, choicelength(integer) loud_vars(integer)
 					* norm e.g. if a question is not required, or there is a constraint, etc. 
 					* If none of the fields differ from the norm, then `rows' = 0 
 					* and this table is left blank. 
-					if `rows' > 0 { 
+					if `rows' > 0 {
 						qui putpdf table auxt = (`rows', 1), border(all, nil) memtable 
 						loc row = 1 
 						
@@ -697,7 +724,8 @@ syntax, choicelength(integer) loud_vars(integer)
 						}
 						
 						capture confirm e `required' 
-						if !_rc
+						if !_rc {
+						}
 						else { 
 							putpdf table auxt(`row', 1) = ("Required: "), underline 
 							putpdf table auxt(`row', 1) = ("`required_details'"), append 
@@ -712,6 +740,9 @@ syntax, choicelength(integer) loud_vars(integer)
 				if !_rc loc trows = 12
 				else loc trows = 10
 				qui putpdf table t = (`trows', 10), border(all, nil) 
+				forvalues i = 1 / `trows' {
+					putpdf table t(`i', .), nosplit 
+				}
 				putpdf table t(1,1) = table(nt), span(5, 7) 
 				if `rows' > 0 putpdf table t(1, 8) = table(auxt), span(10, 3)    
 
