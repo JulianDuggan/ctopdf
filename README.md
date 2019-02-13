@@ -1,3 +1,4 @@
+/*
 SUMMARY: This do file writes a function called ctopdf that will convert a survey
 formatted in a surveyCTO excel document into a much more readable PDF.  
 
@@ -41,20 +42,18 @@ Fully specified, the function might look like:
 Some things that can go wrong / that you could want to know: 
 
  1- If you get an error like "Failed to set table", try manually entering "putpdf clear" 3 times from the stata command line. I don't know why this works, but it sometimes does. 
- 
  2- Make sure to use forward slashes (/) when specifying files, not backwards slashes (\)
- 
- 3- If you have questions or value labels of more than 2045 characters, they will be truncated. Characters like $, }, {, and " will also be removed from all strings. 
-	
+ 3- If you have questions or value labels of more than 2045 characters, they will be truncated. 
+	Characters like $, }, {, and " will also be removed from all strings. 
  4- Disabled questions will not be included in the pdf.  
- 
  5- This function will clear all of your global macros 
- 
- 6- You try to do the merge option without having installed PDFTK (right now, only Windows is supported). 
- 
+ 6- You try to do the merge option without having installed PDFTK (right now, 
+ only Windows is supported). 
  7- You don't have ssc packages mmerge and egenmore installed. Specify the packages option. 
- 
  8- specify the DIRECTORY of the saving location, not the file name (so "C:/Users/me/Desktop" not "C:/Users/me/Desktop/survey.pdf")  
+ 9- If you specify merge, other files in your save directory that begin with the word "part" will get deleted. I should probably just prevent this.
  
  To get the merge option working, install PDFTK: 
  https://www.pdflabs.com/tools/pdftk-the-pdf-toolkit/
+ 
+  */
