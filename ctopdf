@@ -47,8 +47,7 @@ Some things that can go wrong / that you could want to know:
 	Characters like $, }, {, and " will also be removed from all strings. 
  4- Disabled questions will not be included in the pdf.  
  5- This function will clear all of your global macros 
- 6- You try to do the merge option without having installed PDFTK (right now, 
- only Windows is supported). 
+ 6- You try to do the merge option without having installed PDFTK
  7- You don't have ssc packages mmerge and egenmore installed. Specify the packages option. 
  8- specify the DIRECTORY of the saving location, not the file name (so "C:/Users/me/Desktop" not "C:/Users/me/Desktop/survey.pdf")  
  9- If you specify merge, other files in your save directory that begin with the word "part" will get deleted. I should probably just prevent this.
