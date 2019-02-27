@@ -27,7 +27,7 @@ Explanations of the options:
 	  in the value label dictionary. All other value label options appear in the
 	  text of the main survey every time they are used. 
 	* coverimage - path to file of image that you would like to appear on the cover
-	* translation - WORK IN PROGRESS - language that you would like translation to appear in. 
+	* translation - language that you would like translation to appear in. 
 	* packages - ssc installs / updates all of the packages needed to make the program work
 	* loudvars - print the name of each variable as it is formatted. mostly for debugging purposes. 
 	
@@ -45,16 +45,12 @@ Some things that can go wrong / that you could want to know:
  2- Make sure to use forward slashes (/) when specifying files, not backwards slashes (\)
  
  3- If you have questions or value labels of more than 2045 characters, they will be truncated. Characters like $, }, {, and " will also be removed from all strings. 
- 
+	
  4- Disabled questions will not be included in the pdf.  
-  
  5- You try to do the merge option without having installed PDFTK
- 
  6- You don't have ssc packages mmerge and egenmore installed. Specify the packages option. 
- 
- 7- specify the directory of the saving location, not the file name 
- 
- 8- If you specify merge, other files in your save directory that begin with the word "part" will get deleted. I should probably just prevent this.
+ 7- specify the directory of the saving location, not the file name (so "C:/Users/me/Desktop" not "C:/Users/me/Desktop/survey.pdf")  
+ 8- If you specify merge, other files in your save directory that begin with the word "part" will get deleted. 
  
  To get the merge option working, install PDFTK: 
  https://www.pdflabs.com/tools/pdftk-the-pdf-toolkit/
