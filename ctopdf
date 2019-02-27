@@ -28,7 +28,7 @@ Explanations of the options:
 	  in the value label dictionary. All other value label options appear in the
 	  text of the main survey every time they are used. 
 	* coverimage - path to file of image that you would like to appear on the cover
-	* translation - WORK IN PROGRESS - language that you would like translation to appear in. 
+	* translation - language that you would like translation to appear in. 
 	* packages - ssc installs / updates all of the packages needed to make the program work
 	* loudvars - print the name of each variable as it is formatted. mostly for debugging purposes. 
 	
@@ -46,10 +46,12 @@ Some things that can go wrong / that you could want to know:
  3- If you have questions or value labels of more than 2045 characters, they will be truncated. 
 	Characters like $, }, {, and " will also be removed from all strings. 
  4- Disabled questions will not be included in the pdf.  
- 5- You try to do the merge option without having installed PDFTK
- 6- You don't have ssc packages mmerge and egenmore installed. Specify the packages option. 
- 7- Specify the directory of the saving location, not the file name (so "C:/Users/me/Desktop" not "C:/Users/me/Desktop/survey.pdf")  
- 8- If you specify merge, other files in your save directory that begin with the word "part" will get deleted. I should probably just prevent this.
+ 5- This function will clear all of your global macros 
+ 6- You try to do the merge option without having installed PDFTK (right now, 
+ only Windows is supported). 
+ 7- You don't have ssc packages mmerge and egenmore installed. Specify the packages option. 
+ 8- specify the DIRECTORY of the saving location, not the file name (so "C:/Users/me/Desktop" not "C:/Users/me/Desktop/survey.pdf")  
+ 9- If you specify merge, other files in your save directory that begin with the word "part" will get deleted. 
  
  To get the merge option working, install PDFTK: 
  https://www.pdflabs.com/tools/pdftk-the-pdf-toolkit/
@@ -58,7 +60,7 @@ Some things that can go wrong / that you could want to know:
 
 cap prog drop ctopdf 
 prog def ctopdf 
-syntax using/, TItle(string) SAve(string)[Merge SKiplist(numlist) Date(string) Packages TRANSLation Version(string) CHOICElength(integer 10) COVERimage(string) Authors(string) loudvars]
+syntax using/, TItle(string) SAve(string)[Merge SKiplist(numlist) Date(string) Packages TRanslation(string) Version(string) CHOICElength(integer 10) COVERimage(string) Authors(string) loudvars]
 
 ////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////// Preliminaries //////////////////////////////////
@@ -68,6 +70,7 @@ syntax using/, TItle(string) SAve(string)[Merge SKiplist(numlist) Date(string) P
 clear 
 clear mata
 putpdf clear
+* macro drop doc_count table_count question_count heading* rheading*  
 set more off 
 set maxvar 30000
 
@@ -79,20 +82,46 @@ if !_rc {
 		if _rc == 111 ssc install `package'
 	}
 }
-	
+
 ////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////// Clean Survey ///////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
-					
+
 // CHOICES SHEET
 
 	// import choice list 
 	qui import excel using "`using'", clear firstrow sheet("choices")
 	
 	// standardize variable names / set
-	* NOTE: IF YOU WANT TO ADD TRANSLATIONS, START BY CHANGING NEXT LINE 
 	capture confirm var name , exact
 	if !_rc rename name value
+
+// replace choice labels with other language if specified
+	capture confirm e `translation'
+	if _rc == 0 {
+		
+		* get all label variable names to lowercase, all types to string
+		qui ds label*
+		foreach v in `r(varlist)' {
+			loc lower_lang = lower("`v'")
+			qui rename `v' `lower_lang'
+			qui tostring `lower_lang', replace
+		}
+		loc translation = lower("`translation'")
+
+		* replace missing values with english (as surveyCTO does itself, I think?)
+		qui count if mi(label`translation') & !mi(label)
+		loc label_lang_miss = `r(N)'
+		if `label_lang_miss' > 0 {
+			ta list_name if mi(label`translation') & !mi(label), m
+			qui replace label`translation' = label if mi(label`translation') & !mi(label)
+			di "WARNING: The above choice labels have `label_lang_miss' missing values in `translation'. These missing values have been substituted with labels in the default language."  
+			
+			drop label
+			rename label`translation' label
+		}	
+	}
+
 	capture keep list_name value label
 	if _rc == 111 {
 		di "Make sure that your choice sheet's column names are list_name, value, and label." 
@@ -124,12 +153,12 @@ if !_rc {
 	qui egen values = concat(value*)
 	qui egen choicecount = nwords(choices)
 	qui egen valuecount = nwords(values)	
-	
+
 	// check for errors
 	capture assert choicecount == valuecount
 	if _rc == 9 {
 		ta list_name if choicecount != valuecount, m
-		di "Warning: Some of your value labels may not correspond to the appropriate values. Check for weird characters in your value labels" 
+		di "WARNING: The value labels tabbed above are not being processed properly. Check for weird characters in your value labels. If you are using the translation option, make sure that all your choice labels are defined in the language that you have specified." 
 	}
 	
 	// standardize var set 
@@ -166,7 +195,7 @@ if !_rc {
 		capture assert dupname == 0 | dupname == .
 		if _rc == 9 {
 			ta name dupname if dupname !=. & dupname !=0, m
-			di "Some of your questions(other than begin group, end group, begin repeat, end repeat) have duplicated names -- remove the duplicates!" 
+			di "Some of your questions(other than begin group, end group, begin repeat, end repeat) have duplicated names. See the tabulated names above, and remove the duplicates." 
 			drop dupname
 			exit
 		}
@@ -194,7 +223,33 @@ if !_rc {
 		// type (excludes value label name) 
 		qui gen type_clean = word(type, 1) 		
 		qui replace type = type_clean if strpos(type, "select_one") + strpos(type, "select_multiple") > 0
-
+		
+		// replace label language if specified 
+		capture confirm e `translation' 
+		if _rc == 0 {
+			
+			* get all label variable names to lowercase 
+			qui ds label*
+			foreach v in `r(varlist)' {
+				loc lower_lang = lower("`v'")
+				qui rename `v' `lower_lang'
+				qui tostring `lower_lang', replace
+			}
+			loc translation = lower("`translation'")
+			
+			* replace missing values with english (as surveyCTO does itself, I think?)
+			qui count if mi(label`translation') & !mi(label)
+			loc label_lang_miss2 = `r(N)'
+			if `label_lang_miss2' > 0 {
+				ta name if mi(label`translation') & !mi(label), m
+				qui replace label`translation' = label if mi(label`translation') & !mi(label)
+				di "WARNING: The above questions have `label_lang_miss2' missing values in `translation'. These missing values have been substituted with labels in the default language."  
+				
+				drop label
+				rename label`translation' label
+			}
+		}
+		
 // MERGED SURVEY AND CHOICES
 
 	// merge
@@ -273,7 +328,14 @@ if !_rc {
 	
 	// title page
 	putpdf paragraph, font(, 16) halign(center) 
-	putpdf text ("`title'"), linebreak(3) bold 
+	putpdf text ("`title'"), linebreak(2) bold 
+	
+	capture confirm e `translation'
+	if !_rc {
+		loc prop_lang = proper("`translation'")
+		putpdf text ("`prop_lang' Translation"), italic linebreak(2)
+	}
+	else putpdf text (" "), linebreak(1) 
 	
 	capture confirm e `date'
 	if !_rc putpdf text ("`date'"), linebreak(1)
